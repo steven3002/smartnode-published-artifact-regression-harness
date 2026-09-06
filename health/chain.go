@@ -85,3 +85,30 @@ func CheckCLGenesis(ctx context.Context) error {
 
 	return nil
 }
+
+// CheckELCLAuth verifies that the CL has an authenticated Engine API connection
+// to the EL by querying the CL's syncing status. The el_offline field in the
+// response is false only when the CL can reach the EL via JWT-authenticated
+// Engine API — proving the JWT secret is shared and functional.
+func CheckELCLAuth(ctx context.Context) error {
+	out, err := docker.GetHTTP(ctx, "rocketpool_eth2", 5052, "/eth/v1/node/syncing")
+	if err != nil {
+		return fmt.Errorf("failed to query CL syncing status: %w", err)
+	}
+
+	var resp struct {
+		Data struct {
+			ELOffline bool `json:"el_offline"`
+		} `json:"data"`
+	}
+
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return fmt.Errorf("failed to parse CL syncing response: %w", err)
+	}
+
+	if resp.Data.ELOffline {
+		return fmt.Errorf("CL reports EL is offline — Engine API authentication may have failed")
+	}
+
+	return nil
+}

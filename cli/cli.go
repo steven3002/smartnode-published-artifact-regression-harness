@@ -237,6 +237,18 @@ func (c *CLI) executeStep(mode string, fixtureName string, noInput bool, checkpo
 	}
 	ecClient, ccClient := parts[0], parts[1]
 
+	// Determine fixture semantics per profile: Besu repairs zero-byte JWT
+	// (start-ec.sh:303 uses [ ! -s ]), Geth does not (no guard in start-ec.sh).
+	fixtureKind := result.FixtureNone
+	if isFixture && fixtureName == "empty-jwt" {
+		switch ecClient {
+		case "besu", "reth", "erigon":
+			fixtureKind = result.FixtureRepair
+		default:
+			fixtureKind = result.FixtureDefect
+		}
+	}
+
 	fixtureSetup := ""
 	if fixtureName == "empty-jwt" {
 		fixtureSetup = fmt.Sprintf("mkdir -p %s/.rocketpool/data/secrets && touch %s/.rocketpool/data/secrets/jwtsecret", rc.HomeDir, rc.HomeDir)
@@ -336,6 +348,14 @@ rocketpool service start --yes --ignore-slash-timer
 				} else {
 					fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusPass, "CL genesis verified"))
 
+					// Verify authenticated Engine API connectivity
+					if err := health.CheckELCLAuth(ctx); err != nil {
+						fmt.Fprintf(c.Stderr, ui.FormatStatus(capErr, ui.StatusFail, "Engine API auth failed: %v\n"), err)
+						exitClass = result.ClassProduct
+						rep.Result = result.Result{Outcome: result.OutcomeFail, FailureClass: exitClass}
+					} else {
+						fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusPass, "Engine API authenticated (EL online)"))
+
 					// Verify JWT
 					jwtPath := filepath.Join(rc.HomeDir, ".rocketpool", "data", "secrets")
 					jwtBytes, jwtErr := os.ReadFile(filepath.Join(jwtPath, "jwtsecret"))
@@ -370,6 +390,7 @@ rocketpool service start --yes --ignore-slash-timer
 						}
 					}
 				}
+				}
 			}
 		}
 	}
@@ -394,5 +415,8 @@ rocketpool service terminate --yes
 		}
 	}
 
+	if fixtureKind != result.FixtureNone {
+		return result.FixtureExitCode(exitClass, fixtureKind)
+	}
 	return result.ExitCode(exitClass, isFixture)
 }
