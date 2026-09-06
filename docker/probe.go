@@ -45,7 +45,12 @@ func explainCurl(code int, stderr string) *ProbeError {
 	e := &ProbeError{ExitCode: code}
 	switch code {
 	case 6:
-		e.Reason = "container name did not resolve; the stack network is not up yet"
+		// The name is served by the daemon's embedded DNS, which only carries
+		// containers currently attached to the network. A name that does not
+		// resolve therefore means the container is not registered yet — it may
+		// be starting, restarting, or absent. It does not mean the network is
+		// missing, and claiming so sends a reader to check the wrong thing.
+		e.Reason = "container is not registered on the stack network yet; it may still be starting or restarting"
 		e.Starting = true
 	case 7:
 		e.Reason = "connection refused; the service has not opened its port yet"

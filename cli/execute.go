@@ -213,10 +213,12 @@ func (c *CLI) pipeline(
 	say(ui.StatusInfo, "polling readiness")
 	readyCtx, cancelReady := context.WithTimeout(ctx, o.readyDeadline)
 	defer cancelReady()
+
+	waits := newWaitReporter(c.Stderr, cap)
+	defer waits.done()
+
 	readiness := health.PollReadiness(readyCtx, composeProject, restartWindow, pollInterval, health.Opts{
-		Observe: func(line string) {
-			fmt.Fprintln(c.Stderr, ui.FormatStatus(cap, ui.StatusInfo, line))
-		},
+		Observe: waits.report,
 
 		// A malformed engine-API secret is a definitive answer: the clients
 		// cannot authenticate to each other and no amount of further waiting
@@ -231,6 +233,8 @@ func (c *CLI) pipeline(
 				true
 		},
 	})
+
+	waits.done()
 
 	if !readiness.Ready {
 		if readiness.Diagnosis == jwt.CodeMalformed {
