@@ -1,0 +1,92 @@
+diff --git a/.github/workflows/release-regression.yml b/.github/workflows/release-regression.yml
+new file mode 100644
+index 000000000..97990bb23
+--- /dev/null
++++ b/.github/workflows/release-regression.yml
+@@ -0,0 +1,86 @@
++name: Release Regression
++
++on:
++  release:
++    types: [published]
++  workflow_dispatch:
++    inputs:
++      tag:
++        description: 'Release tag to verify (e.g., v1.23.0)'
++        required: true
++        type: string
++
++jobs:
++  regression:
++    runs-on: ubuntu-latest
++    strategy:
++      fail-fast: false
++      matrix:
++        profile: [geth-lighthouse, besu-teku]
++    steps:
++      - name: Determine tag
++        id: vars
++        run: |
++          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
++            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
++          else
++            echo "tag=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
++          fi
++
++      - name: Wait for release assets
++        env:
++          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
++        run: |
++          TAG="${{ steps.vars.outputs.tag }}"
++          MAX_RETRIES=15
++          DELAY_SEC=60
++          
++          for ((i=1; i<=MAX_RETRIES; i++)); do
++            echo "Checking for release assets for tag $TAG (Attempt $i/$MAX_RETRIES)..."
++            
++            # Check if release exists and has assets, grep for the linux-amd64 cli binary as indicator
++            if gh release view "$TAG" --repo ${{ github.repository }} --json assets -q '.assets[].name' 2>/dev/null | grep -q 'rocketpool-cli-linux-amd64'; then
++              echo "Release assets found!"
++              exit 0
++            fi
++            
++            echo "Assets not fully uploaded yet. Waiting $DELAY_SEC seconds..."
++            sleep $DELAY_SEC
++          done
++          
++          echo "Error: Release assets did not appear within the timeout."
++          exit 1
++
++      - name: Checkout harness repository
++        uses: actions/checkout@v4
++        with:
++          repository: OWNER/smartnode-release-regression # Replace OWNER with the actual owner
++          path: harness
++          
++      - name: Set up Go
++        uses: actions/setup-go@v5
++        with:
++          go-version: '1.23'
++          
++      - name: Build harness
++        working-directory: ./harness
++        run: go build -o rp-regress .
++        
++      - name: Run normal profile
++        working-directory: ./harness
++        run: ./rp-regress run --release ${{ steps.vars.outputs.tag }} --profile ${{ matrix.profile }} --checkpoint-url https://checkpoint-sync.hoodi.ethpandaops.io
++        
++      - name: Run empty-jwt fixture
++        working-directory: ./harness
++        run: ./rp-regress fixture --name empty-jwt --profile ${{ matrix.profile }}
++        
++      - name: Upload Report
++        if: always()
++        uses: actions/upload-artifact@v4
++        with:
++          name: regression-report-${{ matrix.profile }}
++          path: |
++            harness/report.json
++            harness/report.md
++            harness/results.xml
++            harness/diagnostics/

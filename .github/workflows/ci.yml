@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [geth-lighthouse, besu-teku]
+        type: [run, fixture]
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          
+      - name: Build harness
+        run: go build -o rp-regress .
+        
+      - name: Run unit tests
+        if: matrix.profile == 'geth-lighthouse' && matrix.type == 'run'
+        run: go test -v ./...
+        
+      - name: Run normal profile
+        if: matrix.type == 'run'
+        run: ./rp-regress run --release v1.23.0 --profile ${{ matrix.profile }} --checkpoint-url https://checkpoint-sync.hoodi.ethpandaops.io
+        
+      - name: Run fixture
+        if: matrix.type == 'fixture'
+        run: ./rp-regress fixture --name empty-jwt --profile ${{ matrix.profile }}
+        
+      - name: Upload Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reports-${{ matrix.profile }}-${{ matrix.type }}
+          path: |
+            report.json
+            report.md
+            results.xml
+            diagnostics/
