@@ -2,50 +2,96 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  test:
+  # Unit tests are fast, hermetic and need no Docker daemon or public network,
+  # so they gate the expensive jobs rather than running inside them.
+  unit:
+    name: Unit tests
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build
+        run: go build -o rp-regress ./cmd/rp-regress
+
+  # Full profile runs start a real client stack and sync against a public
+  # network. Hosted runners provide 14 GB of disk, and the client images alone
+  # are over 5 GB before any chain data, so these run on a self-hosted runner.
+  # The requirement is reproducible public evidence, not a particular provider.
+  regression:
+    name: ${{ matrix.type }} / ${{ matrix.profile }}
+    needs: unit
+    runs-on: [self-hosted, linux, x64]
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
         profile: [geth-lighthouse, besu-teku]
         type: [run, fixture]
-    
+
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Set up Go
-        uses: actions/setup-go@v5
+
+      - uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
-          
+          go-version-file: go.mod
+
       - name: Build harness
-        run: go build -o rp-regress .
-        
-      - name: Run unit tests
-        if: matrix.profile == 'geth-lighthouse' && matrix.type == 'run'
-        run: go test -v ./...
-        
-      - name: Run normal profile
+        run: go build -o rp-regress ./cmd/rp-regress
+
+      - name: Profile run
         if: matrix.type == 'run'
-        run: ./rp-regress run --release v1.23.0 --profile ${{ matrix.profile }} --checkpoint-url https://checkpoint-sync.hoodi.ethpandaops.io
-        
-      - name: Run fixture
+        run: ./rp-regress run
+          --release v1.23.0
+          --profile ${{ matrix.profile }}
+          --checkpoint-url https://checkpoint-sync.hoodi.ethpandaops.io
+          --out-dir results
+          --color never
+
+      # A fixture exits 0 when it observes what it predicted. For
+      # geth-lighthouse that is a product failure, so a zero exit here means the
+      # defect still reproduces; a non-zero exit means it did not, which is
+      # itself a finding worth failing the job for.
+      - name: Fixture run
         if: matrix.type == 'fixture'
-        run: ./rp-regress fixture --name empty-jwt --profile ${{ matrix.profile }}
-        
-      - name: Upload Report
+        run: ./rp-regress fixture
+          --name empty-jwt
+          --profile ${{ matrix.profile }}
+          --checkpoint-url https://checkpoint-sync.hoodi.ethpandaops.io
+          --out-dir results
+          --color never
+
+      - name: Upload reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: reports-${{ matrix.profile }}-${{ matrix.type }}
-          path: |
-            report.json
-            report.md
-            results.xml
-            diagnostics/
+          path: results/
+          if-no-files-found: error
+
+      - name: Publish test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-${{ matrix.profile }}-${{ matrix.type }}
+          path: results/results.xml
+          if-no-files-found: error

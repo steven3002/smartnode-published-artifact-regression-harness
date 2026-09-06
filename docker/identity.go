@@ -6,21 +6,29 @@ import (
 	"fmt"
 	"os/exec"
 
-	"github.com/rocket-pool/smartnode/rp-regress/compose"
+	"github.com/steven3002/smartnode-published-artifact-regression-harness/compose"
 )
 
-// ImageIdentity holds the resolved digests and local ID for an image.
+// ImageIdentity holds the resolved digests and local ID for an image, and
+// whether the running container is actually using what was resolved.
 type ImageIdentity struct {
 	ServiceName    string
 	Tag            string
 	IndexDigest    string
 	PlatformDigest string
 	LocalImageID   string
+	Matches        bool
+	Mismatch       string
 }
 
-// VerifyStackImages resolves the registry digests for all images in the stack,
-// retrieves the actual image ID used by each running container, and verifies
-// that they match the expected digest.
+// VerifyStackImages resolves the registry digest for every image in the stack
+// and compares it with the image the corresponding container is actually
+// running.
+//
+// A mismatch is recorded on the identity rather than returned as an error: it
+// is a finding the report must show per image, and aborting the sweep would
+// hide the images that were fine. Errors are reserved for a resolution that
+// could not be attempted.
 func VerifyStackImages(ctx context.Context, stack *compose.Stack, arch, os string) ([]ImageIdentity, error) {
 	var identities []ImageIdentity
 
@@ -71,8 +79,10 @@ func VerifyStackImages(ctx context.Context, stack *compose.Stack, arch, os strin
 			}
 		}
 
+		mismatch := ""
 		if !matchFound {
-			return nil, fmt.Errorf("mismatch detected: container %q is running image ID %s which does not match resolved registry digest %s", containerName, localID, digestInfo.IndexDigest)
+			mismatch = fmt.Sprintf("container %q runs image %s, which is not the resolved digest %s",
+				containerName, localID, digestInfo.IndexDigest)
 		}
 
 		identities = append(identities, ImageIdentity{
@@ -81,6 +91,8 @@ func VerifyStackImages(ctx context.Context, stack *compose.Stack, arch, os strin
 			IndexDigest:    digestInfo.IndexDigest,
 			PlatformDigest: digestInfo.PlatformDigest,
 			LocalImageID:   localID,
+			Matches:        matchFound,
+			Mismatch:       mismatch,
 		})
 	}
 

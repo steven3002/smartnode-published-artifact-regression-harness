@@ -5,7 +5,7 @@ import (
 	"os/exec"
 	"time"
 
-	"github.com/rocket-pool/smartnode/rp-regress/runctx"
+	"github.com/steven3002/smartnode-published-artifact-regression-harness/runctx"
 )
 
 // StartServiceParams holds the parameters to start the Smartnode service.
@@ -14,8 +14,19 @@ type StartServiceParams struct {
 	Yes              bool
 }
 
-// Start runs `rocketpool service start` with the given parameters.
-func Start(ctx context.Context, rc *runctx.RunContext, binPath string, params StartServiceParams) (runctx.StepResult, error) {
+// StartDeadline bounds stack startup.
+//
+// It is generous because the first run on a host pulls several gigabytes of
+// client images before anything starts, and a pull that is merely slow must not
+// be recorded as a product defect.
+const StartDeadline = 20 * time.Minute
+
+// Start brings up the generated stack.
+//
+// --ignore-slash-timer is required in addition to --yes: the anti-slashing
+// prompt is raised without a --yes guard, so it fires on a fresh install even
+// under --yes and blocks an unattended run.
+func Start(ctx context.Context, rc *runctx.RunContext, binPath string, params StartServiceParams, redactFn func([]byte) []byte) (runctx.StepResult, error) {
 	args := []string{"service", "start"}
 	if params.Yes {
 		args = append(args, "--yes")
@@ -25,7 +36,5 @@ func Start(ctx context.Context, rc *runctx.RunContext, binPath string, params St
 	}
 
 	cmd := exec.Command(binPath, args...)
-	// Starting containers can take some time as it pulls images, so we use a 5-minute deadline.
-	// We allow up to 10MB of output.
-	return rc.RunStep(ctx, cmd, 5*time.Minute, 10*1024*1024, nil)
+	return rc.RunStep(ctx, "start", cmd, StartDeadline, 16*1024*1024, redactFn)
 }

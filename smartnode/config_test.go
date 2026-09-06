@@ -2,22 +2,32 @@ package smartnode_test
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
-	"github.com/rocket-pool/smartnode/rp-regress/compose"
-	"github.com/rocket-pool/smartnode/rp-regress/runctx"
-	"github.com/rocket-pool/smartnode/rp-regress/smartnode"
+	"github.com/steven3002/smartnode-published-artifact-regression-harness/compose"
+	"github.com/steven3002/smartnode-published-artifact-regression-harness/runctx"
+	"github.com/steven3002/smartnode-published-artifact-regression-harness/smartnode"
 )
 
-// binPath must be the path to the rocketpool binary for the test.
-// Since tests run in the package dir, we can build it or assume it's at a specific path.
-// For the regression harness, we typically rely on the artifact downloader, but here we can mock or use a provided path.
-// We'll use a hardcoded path to the scratch binary we built for testing, or skip if not found.
-const testBinPath = "/home/ubuntu/smartnode-release-regression/scratch/rocketpool"
+// binaryEnvVar names an already-verified Smartnode binary to exercise.
+//
+// This is an integration test against a real published artifact, so it is opt-in
+// rather than skipped-by-default on a hardcoded path: a test that silently
+// depends on a hand-placed file passes or fails for reasons unrelated to the code.
+const binaryEnvVar = "RP_REGRESS_TEST_BINARY"
 
 func TestHeadlessConfiguration(t *testing.T) {
-	// We want to test two profiles: geth-lighthouse and besu-teku
+	testBinPath := os.Getenv(binaryEnvVar)
+	if testBinPath == "" {
+		t.Skipf("set %s to a verified rocketpool binary to run this integration test", binaryEnvVar)
+	}
+	if _, err := os.Stat(testBinPath); err != nil {
+		t.Fatalf("%s=%s is not usable: %v", binaryEnvVar, testBinPath, err)
+	}
+
+	// Both MVP profiles must configure headlessly.
 	profiles := []struct {
 		ec string
 		cc string
@@ -38,7 +48,7 @@ func TestHeadlessConfiguration(t *testing.T) {
 			defer rc.Cleanup()
 
 			// 1. Install templates
-			_, err = smartnode.Install(ctx, rc, testBinPath)
+			_, err = smartnode.Install(ctx, rc, testBinPath, nil)
 			if err != nil {
 				t.Fatalf("Install failed: %v", err)
 			}
@@ -50,7 +60,7 @@ func TestHeadlessConfiguration(t *testing.T) {
 				Network:         smartnode.NetworkHoodi,
 				CheckpointURL:   smartnode.DefaultCheckpointURL,
 			}
-			_, err = smartnode.Config(ctx, rc, testBinPath, params)
+			_, err = smartnode.Config(ctx, rc, testBinPath, params, nil)
 			if err != nil {
 				t.Fatalf("Config failed: %v", err)
 			}

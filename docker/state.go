@@ -43,10 +43,12 @@ func GetContainerState(ctx context.Context, containerName string) (Sample, error
 	}, nil
 }
 
-// GetStackStates gets the states of all containers matching a prefix (e.g., rocketpool_).
-// In a real implementation we might query by docker-compose project, but this provides a simple factual lookup.
+// GetStackStates samples every container in a compose project.
+//
+// Containers are found by the compose project label rather than by a name
+// prefix, so a container that happens to share the prefix but belongs to another
+// stack cannot influence a verdict.
 func GetStackStates(ctx context.Context, projectName string) (map[string]Sample, error) {
-	// Docker compose uses labels for project.
 	cmd := exec.CommandContext(ctx, "docker", "ps", "-a", "--filter", "label=com.docker.compose.project="+projectName, "--format", "{{.Names}}")
 	out, err := cmd.Output()
 	if err != nil {

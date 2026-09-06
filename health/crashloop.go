@@ -3,7 +3,7 @@ package health
 import (
 	"time"
 
-	"github.com/rocket-pool/smartnode/rp-regress/docker"
+	"github.com/steven3002/smartnode-published-artifact-regression-harness/docker"
 )
 
 // RestartSeries is a chronological list of observations for a single container.
@@ -23,16 +23,16 @@ func (s RestartSeries) HasStabilised(window time.Duration) bool {
 		return false
 	}
 
-	// We look for the earliest sample that shares the same restart count.
-	// If the time elapsed since that sample is >= window, we are stable.
+	// Find the earliest sample sharing the latest restart count. If that sample
+	// is at least a window old, the count has stopped increasing.
 	for i := 0; i < len(s); i++ {
 		sample := s[i]
 		if sample.RestartCount == latest.RestartCount {
 			if latest.ObservedAt.Sub(sample.ObservedAt) >= window {
 				return true
 			}
-			// Since samples are chronological, if the first one we find with the same
-			// restart count isn't old enough, no subsequent ones will be either.
+			// Samples are chronological, so if the first match is not old
+			// enough, no later one will be either.
 			return false
 		}
 	}
@@ -40,9 +40,46 @@ func (s RestartSeries) HasStabilised(window time.Duration) bool {
 	return false
 }
 
-// IsCrashLooping checks if a series indicates a permanent crash loop (restarts increasing over time).
-// This is simply the opposite of HasStabilised when we reach a deadline, but we can also
-// use it to detect runaway restarts if needed.
+// IsCrashLooping reports that a container has not yet settled.
+//
+// This is not on its own a reason to fail: a healthy cold start restarts the
+// beacon node several times while it waits for the execution client to write
+// the engine-API secret. Use IsRunawayRestarting to distinguish a stack that is
+// still coming up from one that never will.
 func (s RestartSeries) IsCrashLooping(window time.Duration) bool {
 	return !s.HasStabilised(window)
+}
+
+// IsRunawayRestarting reports that a container is still accumulating restarts
+// after being observed for at least the given period.
+//
+// The distinction from IsCrashLooping is the whole point of this package. A
+// container that restarted three times in its first thirty seconds and then
+// settled is healthy. One whose count is still climbing after a sustained
+// observation is not, and waiting for the deadline to say so wastes the
+// difference between a fast verdict and a slow one.
+func (s RestartSeries) IsRunawayRestarting(observation time.Duration) bool {
+	if len(s) < 2 {
+		return false
+	}
+
+	latest := s[len(s)-1]
+	oldest := s[0]
+	if latest.ObservedAt.Sub(oldest.ObservedAt) < observation {
+		return false
+	}
+
+	// Compare against the oldest sample still inside the observation period, so
+	// restarts from a long-settled start-up do not count against a container
+	// that has since become stable.
+	cutoff := latest.ObservedAt.Add(-observation)
+	baseline := oldest
+	for _, sample := range s {
+		if sample.ObservedAt.After(cutoff) {
+			break
+		}
+		baseline = sample
+	}
+
+	return latest.RestartCount > baseline.RestartCount
 }

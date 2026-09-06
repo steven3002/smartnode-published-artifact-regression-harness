@@ -1,2 +1,25 @@
 dtl1
 rp-regress
+
+# Build output
+/rp
+/rp-regress
+*.test
+
+# Run artifacts — reports and diagnostics are produced per run, never committed
+/report.json
+/report.md
+/results.xml
+/diagnostics/
+/local_id
+/local_id_besu
+
+# Smartnode run state. Contains generated API tokens; must never be committed.
+/data/
+/scratch/
+
+# Local scratch
+/test.sh
+/patch_cli.sh
+/repeat_fixture.sh
+/update_cli.patch

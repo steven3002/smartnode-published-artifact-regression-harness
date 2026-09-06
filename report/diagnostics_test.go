@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rocket-pool/smartnode/rp-regress/redact"
+	"github.com/steven3002/smartnode-published-artifact-regression-harness/redact"
 )
 
 func TestWriteDiagnosticsSanitisation(t *testing.T) {
@@ -49,12 +49,12 @@ func TestWriteDiagnosticsSanitisation(t *testing.T) {
 		if info.IsDir() {
 			return nil
 		}
-		
+
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return err
 		}
-		
+
 		content := string(data)
 		if strings.Contains(content, jwt) {
 			t.Errorf("File %s leaked JWT", path)
@@ -65,7 +65,7 @@ func TestWriteDiagnosticsSanitisation(t *testing.T) {
 		if strings.Contains(content, password) {
 			t.Errorf("File %s leaked password", path)
 		}
-		
+
 		if !strings.Contains(content, "[REDACTED]") {
 			t.Errorf("File %s missing [REDACTED] tag. Original content may not have been matched.", path)
 		}

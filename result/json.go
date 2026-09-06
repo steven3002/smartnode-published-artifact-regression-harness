@@ -5,6 +5,8 @@ import (
 	"fmt"
 )
 
+// UnmarshalJSON rejects any outcome outside the enum, so a typo in a stored
+// report fails loudly rather than being read back as a valid state.
 func (o *Outcome) UnmarshalJSON(data []byte) error {
 	var s string
 	if err := json.Unmarshal(data, &s); err != nil {
@@ -19,13 +21,15 @@ func (o *Outcome) UnmarshalJSON(data []byte) error {
 	}
 }
 
+// UnmarshalJSON rejects any class outside the enum. The empty string is
+// accepted because a passing run has no failure to classify.
 func (fc *FailureClass) UnmarshalJSON(data []byte) error {
 	var s string
 	if err := json.Unmarshal(data, &s); err != nil {
 		return err
 	}
 	switch FailureClass(s) {
-	case ClassSuccess, ClassProduct, ClassInfrastructure, ClassHarness, ClassTimeout, "":
+	case ClassProduct, ClassInfrastructure, ClassHarness, ClassTimeout, "":
 		*fc = FailureClass(s)
 		return nil
 	default:

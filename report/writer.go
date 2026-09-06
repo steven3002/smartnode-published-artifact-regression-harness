@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/rocket-pool/smartnode/rp-regress/result"
+	"github.com/steven3002/smartnode-published-artifact-regression-harness/result"
 )
 
 // WriteAll generates and writes all four required outputs to the specified output directory.

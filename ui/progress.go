@@ -65,7 +65,7 @@ func (p *Progress) Stop() {
 func (p *Progress) clearRegion() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	// Clear the lines we've drawn.
+	// Erase the region, leaving the cursor where it began.
 	// Typically, 1 line for step + len(lines)
 	count := 1 + len(p.lines)
 	for i := 0; i < count; i++ {

@@ -1,76 +1,73 @@
 package result
 
-import (
-	"testing"
-)
+import "testing"
 
-func TestExitCodeMatrix(t *testing.T) {
+func TestExitCode(t *testing.T) {
 	tests := []struct {
-		name      string
-		class     FailureClass
-		isFixture bool
-		want      int
+		name string
+		res  Result
+		want int
 	}{
-		// run cases
-		{"run PASS", ClassSuccess, false, 0},
-		{"run PRODUCT fail", ClassProduct, false, 1},
-		{"run INFRASTRUCTURE fail", ClassInfrastructure, false, 2},
-		{"run HARNESS fail", ClassHarness, false, 3},
-		{"run TIMEOUT fail", ClassTimeout, false, 4},
-
-		// fixture cases (inverted semantics)
-		// fixture → zero only when the expected detection or repair behaviour occurs.
-		{"fixture expected failure observed (PRODUCT)", ClassProduct, true, 0},
-
-		// fixture → non-zero when the harness fails to observe the expected result.
-		{"fixture unexpected PASS", ClassSuccess, true, 1},
-
-		// Infrastructure/harness/timeout pass through as invalid runs.
-		{"fixture INFRASTRUCTURE fail", ClassInfrastructure, true, 2},
-		{"fixture HARNESS fail", ClassHarness, true, 3},
-		{"fixture TIMEOUT fail", ClassTimeout, true, 4},
+		{"pass", Pass(), ExitOK},
+		{"product", Fail(ClassProduct, ""), ExitProduct},
+		{"infrastructure", Fail(ClassInfrastructure, ""), ExitInfrastructure},
+		{"harness", Fail(ClassHarness, ""), ExitHarness},
+		{"timeout", Fail(ClassTimeout, ""), ExitTimeout},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ExitCode(tt.class, tt.isFixture)
-			if got != tt.want {
-				t.Errorf("ExitCode(%v, %v) = %v, want %v", tt.class, tt.isFixture, got, tt.want)
+			if got := ExitCode(tt.res); got != tt.want {
+				t.Errorf("ExitCode(%+v) = %d, want %d", tt.res, got, tt.want)
 			}
 		})
 	}
 }
 
+// TestFixtureExitCode covers the inverted semantics: a fixture exits zero when
+// it observes what it predicted, so a defect fixture that suddenly passes must
+// be reported as a failure rather than a green run.
 func TestFixtureExitCode(t *testing.T) {
 	tests := []struct {
-		name  string
-		class FailureClass
-		kind  FixtureKind
-		want  int
+		name string
+		res  Result
+		kind FixtureKind
+		want int
 	}{
-		// Defect fixtures (e.g. geth empty-jwt): expect ClassProduct
-		{"defect: product failure observed", ClassProduct, FixtureDefect, 0},
-		{"defect: unexpected success", ClassSuccess, FixtureDefect, 1},
-		{"defect: infrastructure", ClassInfrastructure, FixtureDefect, 2},
-		{"defect: timeout", ClassTimeout, FixtureDefect, 4},
+		{"defect: predicted product failure observed", Fail(ClassProduct, ""), FixtureDefect, ExitOK},
+		{"defect: stopped reproducing", Pass(), FixtureDefect, ExitUnexpected},
+		{"defect: infrastructure says nothing", Fail(ClassInfrastructure, ""), FixtureDefect, ExitInfrastructure},
+		{"defect: harness says nothing", Fail(ClassHarness, ""), FixtureDefect, ExitHarness},
+		{"defect: timeout says nothing", Fail(ClassTimeout, ""), FixtureDefect, ExitTimeout},
 
-		// Repair fixtures (e.g. besu empty-jwt): expect ClassSuccess
-		{"repair: success confirmed", ClassSuccess, FixtureRepair, 0},
-		{"repair: unexpected product failure", ClassProduct, FixtureRepair, 1},
-		{"repair: infrastructure", ClassInfrastructure, FixtureRepair, 2},
-		{"repair: timeout", ClassTimeout, FixtureRepair, 4},
+		{"repair: predicted recovery observed", Pass(), FixtureRepair, ExitOK},
+		{"repair: did not recover", Fail(ClassProduct, ""), FixtureRepair, ExitUnexpected},
+		{"repair: infrastructure says nothing", Fail(ClassInfrastructure, ""), FixtureRepair, ExitInfrastructure},
+		{"repair: timeout says nothing", Fail(ClassTimeout, ""), FixtureRepair, ExitTimeout},
 
-		// FixtureNone delegates to regular ExitCode
-		{"none: success", ClassSuccess, FixtureNone, 0},
-		{"none: product", ClassProduct, FixtureNone, 1},
+		{"none: delegates to run semantics on pass", Pass(), FixtureNone, ExitOK},
+		{"none: delegates to run semantics on failure", Fail(ClassProduct, ""), FixtureNone, ExitProduct},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := FixtureExitCode(tt.class, tt.kind)
-			if got != tt.want {
-				t.Errorf("FixtureExitCode(%v, %v) = %v, want %v", tt.class, tt.kind, got, tt.want)
+			if got := FixtureExitCode(tt.res, tt.kind); got != tt.want {
+				t.Errorf("FixtureExitCode(%+v, %v) = %d, want %d", tt.res, tt.kind, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestFailureClassIsNotAnOutcome guards the model rule that pass and fail are
+// recorded in exactly one place. A class that could also mean success would let
+// the two fields disagree.
+func TestFailureClassIsNotAnOutcome(t *testing.T) {
+	if got := Pass().FailureClass; got != "" {
+		t.Errorf("a passing result carries failure class %q; want empty", got)
+	}
+
+	var fc FailureClass
+	if err := fc.UnmarshalJSON([]byte(`"SUCCESS"`)); err == nil {
+		t.Error("SUCCESS was accepted as a failure class; it must be rejected")
 	}
 }

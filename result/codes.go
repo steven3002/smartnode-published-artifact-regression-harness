@@ -1,72 +1,93 @@
 package result
 
-// FailureClass categorizes the type of failure.
+// FailureClass says who is at fault when a run fails.
+//
+// Misclassification is what kills a release gate: a harness that blames the
+// product for a checkpoint provider outage teaches its readers to ignore it.
 type FailureClass string
 
 const (
-	ClassSuccess        FailureClass = "SUCCESS"
-	ClassProduct        FailureClass = "PRODUCT"
+	// ClassProduct means the software under test did the wrong thing.
+	ClassProduct FailureClass = "PRODUCT"
+	// ClassInfrastructure means the world did — a provider, network or registry.
 	ClassInfrastructure FailureClass = "INFRASTRUCTURE"
-	ClassHarness        FailureClass = "HARNESS"
-	ClassTimeout        FailureClass = "TIMEOUT"
+	// ClassHarness means the harness did.
+	ClassHarness FailureClass = "HARNESS"
+	// ClassTimeout means a deadline expired, which is distinct from a defect.
+	ClassTimeout FailureClass = "TIMEOUT"
 )
 
-// FixtureKind distinguishes fixtures that expect a product failure from those
-// that expect a successful repair. The Geth empty-JWT fixture expects failure
-// (the bug is unrecoverable); the Besu empty-JWT fixture expects repair
-// (start-ec.sh:303 regenerates the secret).
+// Exit codes. Distinct per failure class so a script can branch on the reason.
+const (
+	ExitOK             = 0
+	ExitProduct        = 1
+	ExitInfrastructure = 2
+	ExitHarness        = 3
+	ExitTimeout        = 4
+	// ExitUnexpected reports that a fixture did not observe what it predicted.
+	ExitUnexpected = 5
+)
+
+// FixtureKind is what a fixture predicts will happen.
 type FixtureKind int
 
 const (
-	FixtureNone   FixtureKind = iota // not a fixture
-	FixtureDefect                    // expects ClassProduct (observed product failure)
-	FixtureRepair                    // expects ClassSuccess (repair confirmed)
+	// FixtureNone is a normal run, not a fixture.
+	FixtureNone FixtureKind = iota
+	// FixtureDefect predicts a product failure, as on an execution client whose
+	// start script cannot repair a zero-byte secret.
+	FixtureDefect
+	// FixtureRepair predicts the stack recovers, as on a client whose start
+	// script rewrites an empty secret.
+	FixtureRepair
 )
 
-// ExitCode maps a failure class to a distinct exit code.
-// For fixture runs, 0 means "the expected failure was observed".
-func ExitCode(class FailureClass, isFixture bool) int {
-	if isFixture {
-		if class == ClassProduct {
-			return 0 // Expected failure observed
-		}
-		if class == ClassSuccess {
-			return 1 // Harness failed to observe expected failure
-		}
-	} else if class == ClassSuccess {
-		return 0
+// ExitCode maps a run's result to a process exit status.
+func ExitCode(r Result) int {
+	if r.Outcome == OutcomePass {
+		return ExitOK
 	}
-	switch class {
-	case ClassProduct:
-		return 1
+	switch r.FailureClass {
 	case ClassInfrastructure:
-		return 2
+		return ExitInfrastructure
 	case ClassHarness:
-		return 3
+		return ExitHarness
 	case ClassTimeout:
-		return 4
+		return ExitTimeout
+	default:
+		return ExitProduct
 	}
-	return 1
 }
 
-// FixtureExitCode maps outcome to exit code using the fixture's expected kind.
-// Exit 0 means the expected outcome was observed:
-//   - FixtureDefect: ClassProduct is expected (failure observed)
-//   - FixtureRepair: ClassSuccess is expected (repair confirmed)
-//   - FixtureNone: delegates to regular ExitCode
-func FixtureExitCode(class FailureClass, kind FixtureKind) int {
+// FixtureExitCode maps a fixture's result to a process exit status.
+//
+// The semantics are inverted relative to a normal run: zero means the fixture
+// observed what it predicted. A fixture that exits zero because its regression
+// stopped reproducing would be a green light that means nothing.
+func FixtureExitCode(r Result, kind FixtureKind) int {
 	switch kind {
 	case FixtureDefect:
-		return ExitCode(class, true)
+		// The prediction is a product failure. Anything else — including a pass
+		// — means the harness did not observe what it came to observe.
+		if r.Outcome == OutcomeFail && r.FailureClass == ClassProduct {
+			return ExitOK
+		}
+		if r.Outcome == OutcomeFail {
+			// An infrastructure, harness or timeout failure says nothing about
+			// the defect, so it is reported on its own terms.
+			return ExitCode(r)
+		}
+		return ExitUnexpected
 	case FixtureRepair:
-		if class == ClassSuccess {
-			return 0
+		// The prediction is that the stack recovers.
+		if r.Outcome == OutcomePass {
+			return ExitOK
 		}
-		if class == ClassProduct {
-			return 1 // Expected repair but got failure
+		if r.FailureClass == ClassProduct {
+			return ExitUnexpected
 		}
-		return ExitCode(class, false)
+		return ExitCode(r)
 	default:
-		return ExitCode(class, false)
+		return ExitCode(r)
 	}
 }

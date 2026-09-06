@@ -3,11 +3,13 @@ package report
 import (
 	"encoding/xml"
 	"fmt"
+	"strconv"
 
-	"github.com/rocket-pool/smartnode/rp-regress/result"
+	"github.com/steven3002/smartnode-published-artifact-regression-harness/result"
 )
 
-// JUnit model matching standard schemas
+// The JUnit element names and attributes below follow the schema Jenkins,
+// GitHub Actions test reporters and pytest all accept.
 type TestSuites struct {
 	XMLName xml.Name    `xml:"testsuites"`
 	Suites  []TestSuite `xml:"testsuite"`
@@ -43,54 +45,92 @@ type ErrorMsg struct {
 	Body    string `xml:",chardata"`
 }
 
+// ToJUnit renders the run for a CI test reporter.
+//
+// Each recorded step becomes a test case so a reader sees where time went and
+// which step failed, followed by a case carrying the run's verdict.
+//
+// A product defect or a timeout is a <failure>: the run reached a verdict about
+// the software. An infrastructure or harness problem is an <error>: the run did
+// not get far enough to say anything about the product, and reporting it as a
+// test failure would blame the wrong thing.
 func ToJUnit(r *result.Report) ([]byte, error) {
-	tc := TestCase{
+	cases := make([]TestCase, 0, len(r.Steps)+1)
+
+	for _, step := range r.Steps {
+		tc := TestCase{
+			Name:      "step: " + step.Name,
+			ClassName: "rp-regress." + r.Profile,
+			Time:      formatSeconds(step.DurationSec),
+		}
+		if step.Failure != "" {
+			tc.Failure = &Failure{
+				Message: fmt.Sprintf("step %s: %s (exit %d)", step.Name, step.Failure, step.ExitCode),
+				Type:    step.Failure,
+				Body:    r.ReproductionCmd,
+			}
+		}
+		if step.TruncatedBytes > 0 {
+			tc.SystemOut = fmt.Sprintf("output truncated: %d bytes dropped", step.TruncatedBytes)
+		}
+		cases = append(cases, tc)
+	}
+
+	verdict := TestCase{
 		Name:      fmt.Sprintf("%s (%s)", r.Profile, r.Network),
 		ClassName: "rp-regress",
-		Time:      "0", // we could add actual time to Report if needed
+		Time:      formatSeconds(r.TotalDuration()),
+	}
+
+	failures, errors := 0, 0
+	for _, tc := range cases {
+		if tc.Failure != nil {
+			failures++
+		}
 	}
 
 	if r.Result.Outcome == result.OutcomeFail {
-		msg := fmt.Sprintf("Failure Class: %s", r.Result.FailureClass)
+		msg := fmt.Sprintf("Failure class: %s", r.Result.FailureClass)
 		if r.Result.KnownIssue != "" {
-			msg += fmt.Sprintf(" (Known Issue: %s)", r.Result.KnownIssue)
+			msg = fmt.Sprintf("%s: %s", r.Result.KnownIssue, msg)
 		}
-		if r.Result.FailureClass == result.ClassProduct || r.Result.FailureClass == result.ClassTimeout {
-			tc.Failure = &Failure{
+		if r.Result.Reason != "" {
+			msg += " — " + r.Result.Reason
+		}
+
+		switch r.Result.FailureClass {
+		case result.ClassProduct, result.ClassTimeout:
+			verdict.Failure = &Failure{
 				Message: msg,
 				Type:    string(r.Result.FailureClass),
 				Body:    r.ReproductionCmd,
 			}
-		} else {
-			// Infrastructure and Harness are typically errors, not test failures in JUnit semantics
-			tc.Error = &ErrorMsg{
+			failures++
+		default:
+			verdict.Error = &ErrorMsg{
 				Message: msg,
 				Type:    string(r.Result.FailureClass),
 				Body:    r.ReproductionCmd,
 			}
+			errors++
 		}
 	}
 
-	ts := TestSuite{
+	cases = append(cases, verdict)
+
+	suites := TestSuites{Suites: []TestSuite{{
 		Name:     "Release Regression",
-		Tests:    1,
-		Failures: 0,
-		Errors:   0,
-		Time:     "0",
-		Cases:    []TestCase{tc},
-	}
-
-	if r.Result.Outcome == result.OutcomeFail {
-		if r.Result.FailureClass == result.ClassProduct || r.Result.FailureClass == result.ClassTimeout {
-			ts.Failures = 1
-		} else {
-			ts.Errors = 1
-		}
-	}
-
-	suites := TestSuites{
-		Suites: []TestSuite{ts},
-	}
+		Tests:    len(cases),
+		Failures: failures,
+		Errors:   errors,
+		Time:     formatSeconds(r.TotalDuration()),
+		Cases:    cases,
+	}}}
 
 	return xml.MarshalIndent(suites, "", "  ")
+}
+
+// formatSeconds renders a duration the way JUnit consumers expect.
+func formatSeconds(sec float64) string {
+	return strconv.FormatFloat(sec, 'f', 3, 64)
 }

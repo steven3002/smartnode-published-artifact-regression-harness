@@ -5,14 +5,14 @@ import (
 	"os/exec"
 	"time"
 
-	"github.com/rocket-pool/smartnode/rp-regress/runctx"
+	"github.com/steven3002/smartnode-published-artifact-regression-harness/runctx"
 )
 
-// Install runs the non-interactive installation to unpack templates and scripts.
-func Install(ctx context.Context, rc *runctx.RunContext, binPath string) (runctx.StepResult, error) {
-	args := []string{"service", "install", "-d", "-y"}
+// installDeadline bounds template unpacking, which is a local file operation.
+const installDeadline = 2 * time.Minute
 
-	cmd := exec.Command(binPath, args...)
-	// Installation unpacks files locally, should be fast.
-	return rc.RunStep(ctx, cmd, 30*time.Second, 1024*1024, nil)
+// Install unpacks the templates and scripts the generated stack is built from.
+func Install(ctx context.Context, rc *runctx.RunContext, binPath string, redactFn func([]byte) []byte) (runctx.StepResult, error) {
+	cmd := exec.Command(binPath, "service", "install", "-d", "-y")
+	return rc.RunStep(ctx, "install", cmd, installDeadline, 4*1024*1024, redactFn)
 }

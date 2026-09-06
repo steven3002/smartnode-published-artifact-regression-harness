@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/rocket-pool/smartnode/rp-regress/result"
+	"github.com/steven3002/smartnode-published-artifact-regression-harness/result"
 )
 
 func TestJUnitOutput(t *testing.T) {

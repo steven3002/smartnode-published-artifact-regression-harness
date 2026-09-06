@@ -1,4 +1,4 @@
-module github.com/rocket-pool/smartnode/rp-regress
+module github.com/steven3002/smartnode-published-artifact-regression-harness
 
 go 1.25.0
 

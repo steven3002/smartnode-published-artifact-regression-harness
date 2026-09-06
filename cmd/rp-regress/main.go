@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/rocket-pool/smartnode/rp-regress/cli"
+	"github.com/steven3002/smartnode-published-artifact-regression-harness/cli"
 )
 
 func main() {

@@ -1,6 +1,7 @@
 package redact
 
 import (
+	"bytes"
 	"regexp"
 )
 
@@ -13,37 +14,37 @@ type Redactor struct {
 func New() *Redactor {
 	r := &Redactor{}
 
-	// JWT, private keys (64 hex chars, optional 0x prefix)
+	// Engine-API secrets and private keys: 64 hex characters, optionally 0x
+	// prefixed. Both encodings appear on disk, so both must be matched.
 	r.patterns = append(r.patterns, regexp.MustCompile(`(?:0x)?[0-9a-fA-F]{64}`))
 
-	// BIP-39 mnemonic (24 lowercase words separated by single spaces)
-	// We'll use a word boundary to avoid partial matches
+	// A 24-word BIP-39 mnemonic. Word boundaries keep this from matching an
+	// arbitrary run of lowercase prose.
 	r.patterns = append(r.patterns, regexp.MustCompile(`\b([a-z]{3,8}(?: [a-z]{3,8}){23})\b`))
-
-	// Passwords if they are in standard logs, though normally they aren't logged.
-	// We can also add known passwords as literals.
 
 	return r
 }
 
+// AddLiteral registers a known secret to remove verbatim, for values the
+// patterns cannot describe.
 func (r *Redactor) AddLiteral(secret string) {
 	if secret != "" {
 		r.literals = append(r.literals, []byte(secret))
 	}
 }
 
+// placeholder replaces every redacted value, so a reader can see that something
+// was removed rather than that nothing was there.
+var placeholder = []byte("[REDACTED]")
+
+// Redact removes every known secret shape from a buffer.
 func (r *Redactor) Redact(in []byte) []byte {
 	out := in
 	for _, p := range r.patterns {
-		out = p.ReplaceAll(out, []byte("[REDACTED]"))
+		out = p.ReplaceAll(out, placeholder)
 	}
 	for _, l := range r.literals {
-		out = replaceAll(out, l, []byte("[REDACTED]"))
+		out = bytes.ReplaceAll(out, l, placeholder)
 	}
 	return out
-}
-
-func replaceAll(s, old, new []byte) []byte {
-	// Simple non-overlapping replacement
-	return regexp.MustCompile(regexp.QuoteMeta(string(old))).ReplaceAll(s, new)
 }

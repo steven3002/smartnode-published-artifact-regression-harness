@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/rocket-pool/smartnode/rp-regress/docker"
+	"github.com/steven3002/smartnode-published-artifact-regression-harness/docker"
 )
 
 // Hoodi expected constants

@@ -43,15 +43,15 @@ wait
 	byteCap := int64(1024 * 1024)
 
 	start := time.Now()
-	res, err := rc.RunStep(context.Background(), cmd, 500*time.Millisecond, byteCap, nil)
+	res, err := rc.RunStep(context.Background(), "test", cmd, 500*time.Millisecond, byteCap, nil)
 	duration := time.Since(start)
 
 	if duration < 500*time.Millisecond || duration > 3*time.Second { // 500ms + 2s grace
 		t.Errorf("expected duration around 2.5s, got %v", duration)
 	}
 
-	if res.FailureClass != "TIMEOUT" {
-		t.Errorf("expected failure class TIMEOUT, got %v", res.FailureClass)
+	if res.Failure != StepTimeout {
+		t.Errorf("expected failure class TIMEOUT, got %v", res.Failure)
 	}
 
 	if int64(len(res.Output)) > byteCap {

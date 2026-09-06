@@ -40,7 +40,7 @@ func AskSecret(cap Capability, noInput bool, prompt string) (string, error) {
 		return "", err
 	}
 
-	// Run read in a goroutine so we can catch interrupt
+	// Read in a goroutine so an interrupt can restore the terminal before exit.
 	type result struct {
 		pass string
 		err  error

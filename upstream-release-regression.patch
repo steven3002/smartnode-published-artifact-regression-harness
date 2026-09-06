@@ -1,92 +1,120 @@
 diff --git a/.github/workflows/release-regression.yml b/.github/workflows/release-regression.yml
 new file mode 100644
-index 000000000..97990bb23
+index 0000000..8c646ad
 --- /dev/null
 +++ b/.github/workflows/release-regression.yml
-@@ -0,0 +1,86 @@
+@@ -0,0 +1,114 @@
 +name: Release Regression
 +
++# Verifies a published Smartnode release artifact by installing it, configuring
++# it headlessly against Hoodi and starting a real client stack.
++#
++# This does not trigger on tag push. A tag is created before its release assets
++# finish uploading, so a tag-push trigger races the upload and fails against a
++# release that is perfectly healthy.
 +on:
 +  release:
 +    types: [published]
 +  workflow_dispatch:
 +    inputs:
 +      tag:
-+        description: 'Release tag to verify (e.g., v1.23.0)'
++        description: Release tag to verify, for example v1.23.0
 +        required: true
 +        type: string
 +
++permissions:
++  contents: read
++
++env:
++  HARNESS_REPO: steven3002/smartnode-published-artifact-regression-harness
++  CHECKPOINT_URL: https://checkpoint-sync.hoodi.ethpandaops.io
++
 +jobs:
 +  regression:
-+    runs-on: ubuntu-latest
++    name: ${{ matrix.profile }}
++    # Hosted runners provide 14 GB of disk; the client images alone exceed 5 GB
++    # before any chain data. Substitute a hosted runner only if it has been
++    # confirmed to have the headroom.
++    runs-on: [self-hosted, linux, x64]
++    timeout-minutes: 90
 +    strategy:
 +      fail-fast: false
 +      matrix:
 +        profile: [geth-lighthouse, besu-teku]
++
 +    steps:
-+      - name: Determine tag
-+        id: vars
++      - name: Resolve release tag
++        id: release
 +        run: |
 +          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-+            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
++            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
 +          else
-+            echo "tag=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
++            echo "tag=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
 +          fi
 +
++      # Assets can lag the release event. Retry is bounded so a genuinely
++      # missing artifact fails rather than retrying forever.
 +      - name: Wait for release assets
 +        env:
 +          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
++          TAG: ${{ steps.release.outputs.tag }}
 +        run: |
-+          TAG="${{ steps.vars.outputs.tag }}"
-+          MAX_RETRIES=15
-+          DELAY_SEC=60
-+          
-+          for ((i=1; i<=MAX_RETRIES; i++)); do
-+            echo "Checking for release assets for tag $TAG (Attempt $i/$MAX_RETRIES)..."
-+            
-+            # Check if release exists and has assets, grep for the linux-amd64 cli binary as indicator
-+            if gh release view "$TAG" --repo ${{ github.repository }} --json assets -q '.assets[].name' 2>/dev/null | grep -q 'rocketpool-cli-linux-amd64'; then
-+              echo "Release assets found!"
++          set -euo pipefail
++          attempts=15
++          delay=60
++          for i in $(seq 1 "$attempts"); do
++            echo "Checking assets for $TAG (attempt $i/$attempts)"
++            if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets \
++                 --jq '.assets[].name' 2>/dev/null \
++               | grep -qx 'rocketpool-cli-linux-amd64'; then
++              echo "Release assets are published."
 +              exit 0
 +            fi
-+            
-+            echo "Assets not fully uploaded yet. Waiting $DELAY_SEC seconds..."
-+            sleep $DELAY_SEC
++            sleep "$delay"
 +          done
-+          
-+          echo "Error: Release assets did not appear within the timeout."
++          echo "::error::Release assets for $TAG did not appear within $((attempts * delay))s"
 +          exit 1
 +
-+      - name: Checkout harness repository
++      - name: Check out harness
 +        uses: actions/checkout@v4
 +        with:
-+          repository: OWNER/smartnode-release-regression # Replace OWNER with the actual owner
++          repository: ${{ env.HARNESS_REPO }}
 +          path: harness
-+          
-+      - name: Set up Go
-+        uses: actions/setup-go@v5
++
++      - uses: actions/setup-go@v5
 +        with:
-+          go-version: '1.23'
-+          
++          go-version-file: harness/go.mod
++
 +      - name: Build harness
-+        working-directory: ./harness
-+        run: go build -o rp-regress .
-+        
-+      - name: Run normal profile
-+        working-directory: ./harness
-+        run: ./rp-regress run --release ${{ steps.vars.outputs.tag }} --profile ${{ matrix.profile }} --checkpoint-url https://checkpoint-sync.hoodi.ethpandaops.io
-+        
-+      - name: Run empty-jwt fixture
-+        working-directory: ./harness
-+        run: ./rp-regress fixture --name empty-jwt --profile ${{ matrix.profile }}
-+        
-+      - name: Upload Report
++        working-directory: harness
++        run: go build -o rp-regress ./cmd/rp-regress
++
++      - name: Profile run
++        working-directory: harness
++        run: ./rp-regress run
++          --release ${{ steps.release.outputs.tag }}
++          --profile ${{ matrix.profile }}
++          --checkpoint-url ${{ env.CHECKPOINT_URL }}
++          --out-dir results
++          --color never
++
++      # A fixture exits 0 when it observes what it predicted: a product failure
++      # on a client whose start script cannot repair a zero-byte engine-API
++      # secret, or recovery on one that can. A non-zero exit means the predicted
++      # behaviour was not observed, which is itself a finding.
++      - name: Empty-JWT fixture
++        working-directory: harness
++        run: ./rp-regress fixture
++          --name empty-jwt
++          --profile ${{ matrix.profile }}
++          --checkpoint-url ${{ env.CHECKPOINT_URL }}
++          --out-dir results
++          --color never
++
++      - name: Upload reports
 +        if: always()
 +        uses: actions/upload-artifact@v4
 +        with:
-+          name: regression-report-${{ matrix.profile }}
-+          path: |
-+            harness/report.json
-+            harness/report.md
-+            harness/results.xml
-+            harness/diagnostics/
++          name: release-regression-${{ matrix.profile }}
++          path: harness/results/
++          if-no-files-found: error
