@@ -26,7 +26,7 @@ wait
 		t.Fatal(err)
 	}
 	defer os.Remove(scriptFile.Name())
-	
+
 	scriptFile.Write([]byte(script))
 	scriptFile.Close()
 	os.Chmod(scriptFile.Name(), 0755)
@@ -38,10 +38,10 @@ wait
 	defer rc.Cleanup()
 
 	cmd := exec.Command(scriptFile.Name())
-	
+
 	// Byte cap: 1MB. We expect it to drop bytes because the flood is fast.
 	byteCap := int64(1024 * 1024)
-	
+
 	start := time.Now()
 	res, err := rc.RunStep(context.Background(), cmd, 500*time.Millisecond, byteCap, nil)
 	duration := time.Since(start)

@@ -51,7 +51,7 @@ func DetectCapability(f *os.File, colorMode ColorMode, getEnv func(string) strin
 		lcAll := getEnv("LC_ALL")
 		lcCtype := getEnv("LC_CTYPE")
 		lang := getEnv("LANG")
-		
+
 		isSet := lcAll != "" || lcCtype != "" || lang != ""
 		if !isSet {
 			unicode = true

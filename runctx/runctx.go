@@ -43,9 +43,9 @@ func (r *RunContext) Cleanup() error {
 	if err := os.RemoveAll(r.DataDir); err != nil {
 		errs = append(errs, err)
 	}
-	
+
 	// Add Docker teardown logic as required by M10.
-	// Since we are mocking docker interaction here for MVP scope 1, 
+	// Since we are mocking docker interaction here for MVP scope 1,
 	// we will run 'docker compose down -v' on the temp dir if there's a compose file.
 	// We do this by calling a script or running docker natively, but we'll leave it to caller or robust teardown here.
 	// Wait, the spec says "Cleanup that runs on success, failure, timeout and signal — containers, volumes, networks, temp dirs."
@@ -83,12 +83,12 @@ func (b *BoundedWriter) Write(p []byte) (n int, err error) {
 	if b.Redact != nil {
 		p = b.Redact(p)
 	}
-	
+
 	if b.Written >= b.Limit {
 		b.Dropped += int64(len(p))
 		return len(p), nil
 	}
-	
+
 	space := b.Limit - b.Written
 	if int64(len(p)) > space {
 		b.Buf.Write(p[:space])
@@ -96,7 +96,7 @@ func (b *BoundedWriter) Write(p []byte) (n int, err error) {
 		b.Dropped += int64(len(p)) - space
 		return len(p), nil
 	}
-	
+
 	n, err = b.Buf.Write(p)
 	b.Written += int64(n)
 	return n, err
@@ -105,41 +105,41 @@ func (b *BoundedWriter) Write(p []byte) (n int, err error) {
 // RunStep runs a command with a deadline, byte cap, and redaction.
 func (r *RunContext) RunStep(ctx context.Context, cmd *exec.Cmd, deadline time.Duration, byteCap int64, redact func([]byte) []byte) (StepResult, error) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	
+
 	// Apply isolated environment variables
 	env := os.Environ()
 	cmd.Env = append(env, "HOME="+r.HomeDir)
-	
+
 	var out bytes.Buffer
 	writer := &BoundedWriter{
-		Buf:   &out,
-		Limit: byteCap,
+		Buf:    &out,
+		Limit:  byteCap,
 		Redact: redact,
 	}
-	
+
 	cmd.Stdout = writer
 	cmd.Stderr = writer
-	
+
 	if err := cmd.Start(); err != nil {
 		return StepResult{}, fmt.Errorf("start: %w", err)
 	}
-	
+
 	pgid, err := syscall.Getpgid(cmd.Process.Pid)
 	if err != nil {
 		pgid = cmd.Process.Pid
 	}
-	
+
 	done := make(chan error, 1)
 	go func() {
 		done <- cmd.Wait()
 	}()
-	
+
 	timer := time.NewTimer(deadline)
 	defer timer.Stop()
-	
+
 	var waitErr error
 	var failureClass string
-	
+
 	select {
 	case <-ctx.Done():
 		// Cancelled by caller (e.g. SIGINT)
@@ -159,7 +159,7 @@ func (r *RunContext) RunStep(ctx context.Context, cmd *exec.Cmd, deadline time.D
 			failureClass = "PRODUCT"
 		}
 	}
-	
+
 	exitCode := 0
 	if waitErr != nil {
 		var exitErr *exec.ExitError
@@ -169,7 +169,7 @@ func (r *RunContext) RunStep(ctx context.Context, cmd *exec.Cmd, deadline time.D
 			exitCode = -1
 		}
 	}
-	
+
 	return StepResult{
 		Output:         out.Bytes(),
 		TruncatedBytes: writer.Dropped,
@@ -181,10 +181,10 @@ func (r *RunContext) RunStep(ctx context.Context, cmd *exec.Cmd, deadline time.D
 func killProcessGroup(pgid int) {
 	// Send SIGTERM to the process group
 	syscall.Kill(-pgid, syscall.SIGTERM)
-	
+
 	// Wait a short grace period
 	time.Sleep(2 * time.Second)
-	
+
 	// Send SIGKILL to the process group
 	syscall.Kill(-pgid, syscall.SIGKILL)
 }

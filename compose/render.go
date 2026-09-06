@@ -28,7 +28,7 @@ type Service struct {
 // It parses the YAML output into a Stack struct.
 func Render(ctx context.Context, rc *runctx.RunContext, binPath string) (*Stack, error) {
 	cmd := exec.Command(binPath, "service", "compose")
-	
+
 	result, err := rc.RunStep(ctx, cmd, 30*time.Second, 10*1024*1024, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to render compose stack: %w (exit code %d)\nOutput: %s", err, result.ExitCode, string(result.Output))

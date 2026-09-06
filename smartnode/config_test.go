@@ -67,7 +67,7 @@ func TestHeadlessConfiguration(t *testing.T) {
 			if !ok {
 				t.Fatalf("eth1 service missing in stack")
 			}
-			
+
 			if eth1.Environment["BEACON_NETWORK"] != smartnode.BeaconNetworkHoodi {
 				t.Errorf("expected BEACON_NETWORK %s, got %s", smartnode.BeaconNetworkHoodi, eth1.Environment["BEACON_NETWORK"])
 			}
@@ -83,4 +83,3 @@ func TestHeadlessConfiguration(t *testing.T) {
 		})
 	}
 }
-

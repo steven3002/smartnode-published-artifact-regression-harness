@@ -80,7 +80,7 @@ func (p *Progress) clearRegion() {
 func (p *Progress) renderLoop() {
 	framesUni := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 	framesAscii := []string{"|", "/", "-", "\\"}
-	
+
 	frames := framesAscii
 	if p.cap.Unicode {
 		frames = framesUni
@@ -88,7 +88,7 @@ func (p *Progress) renderLoop() {
 
 	ticker := time.NewTicker(90 * time.Millisecond)
 	defer ticker.Stop()
-	
+
 	frameIdx := 0
 	lastCount := 0
 
@@ -98,12 +98,12 @@ func (p *Progress) renderLoop() {
 			return
 		case <-ticker.C:
 			p.mu.Lock()
-			
+
 			// Move up and clear from last render
 			for i := 0; i < lastCount; i++ {
 				fmt.Fprint(p.out, "\033[1A\033[2K\r")
 			}
-			
+
 			// Render
 			colorPre := ""
 			colorPost := ""
@@ -111,24 +111,24 @@ func (p *Progress) renderLoop() {
 				colorPre = ColorCyan
 				colorPost = ColorReset
 			}
-			
+
 			stepLine := fmt.Sprintf("%s%s%s %s", colorPre, frames[frameIdx], colorPost, p.step)
 			// Truncate to width
 			if len(stepLine) > p.cap.WidthCols && p.cap.WidthCols > 0 {
 				stepLine = stepLine[:p.cap.WidthCols]
 			}
 			fmt.Fprintln(p.out, stepLine)
-			
+
 			for _, l := range p.lines {
 				if len(l) > p.cap.WidthCols && p.cap.WidthCols > 0 {
 					l = l[:p.cap.WidthCols]
 				}
 				fmt.Fprintln(p.out, "  "+l)
 			}
-			
+
 			lastCount = 1 + len(p.lines)
 			frameIdx = (frameIdx + 1) % len(frames)
-			
+
 			p.mu.Unlock()
 		}
 	}

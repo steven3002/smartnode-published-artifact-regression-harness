@@ -98,9 +98,9 @@ func expectedVersion(tag string) string {
 }
 
 // Verify performs the complete verification pipeline for a release artifact:
-//   1. SHA-256 digest check (PRODUCT failure on mismatch)
-//   2. GPG signature check (PRODUCT failure on bad/unknown key)
-//   3. Version self-report (PRODUCT failure on mismatch)
+//  1. SHA-256 digest check (PRODUCT failure on mismatch)
+//  2. GPG signature check (PRODUCT failure on bad/unknown key)
+//  3. Version self-report (PRODUCT failure on mismatch)
 //
 // The order is deliberate: the binary is executed only after digest and
 // signature verification pass, because until then it is unverified.

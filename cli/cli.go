@@ -10,11 +10,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/spf13/pflag"
 	"github.com/rocket-pool/smartnode/rp-regress/redact"
 	"github.com/rocket-pool/smartnode/rp-regress/result"
 	"github.com/rocket-pool/smartnode/rp-regress/runctx"
 	"github.com/rocket-pool/smartnode/rp-regress/ui"
+	"github.com/spf13/pflag"
 )
 
 type CLI struct {
@@ -31,7 +31,7 @@ func (c *CLI) Run() int {
 	}
 
 	subCmd := c.Args[1]
-	
+
 	switch subCmd {
 	case "run":
 		return c.runRunCmd(c.Args[2:])
@@ -62,7 +62,7 @@ Common flags:
 func (c *CLI) runRunCmd(args []string) int {
 	fs := pflag.NewFlagSet("run", pflag.ContinueOnError)
 	fs.SetOutput(c.Stderr)
-	
+
 	release := fs.String("release", "", "Smartnode release tag")
 	profile := fs.String("profile", "", "Profile name (e.g. besu, geth)")
 	checkpoint := fs.String("checkpoint-url", "", "Checkpoint sync URL")
@@ -95,7 +95,7 @@ func (c *CLI) runRunCmd(args []string) int {
 func (c *CLI) runFixtureCmd(args []string) int {
 	fs := pflag.NewFlagSet("fixture", pflag.ContinueOnError)
 	fs.SetOutput(c.Stderr)
-	
+
 	name := fs.String("name", "", "Fixture name (e.g. empty-jwt)")
 	profile := fs.String("profile", "", "Profile name")
 	noInput := fs.Bool("no-input", false, "Refuse all prompts")
@@ -127,7 +127,7 @@ func (c *CLI) runFixtureCmd(args []string) int {
 func (c *CLI) executeStep(mode string, isFixture bool, noInput bool) int {
 	fStdErr, _ := c.Stderr.(*os.File)
 	capErr := ui.DetectCapability(fStdErr, ui.ColorAuto, c.Env)
-	
+
 	rc, err := runctx.New()
 	if err != nil {
 		fmt.Fprintf(c.Stderr, "Failed to create run context: %v\n", err)
@@ -138,7 +138,7 @@ func (c *CLI) executeStep(mode string, isFixture bool, noInput bool) int {
 	// Signal handling for graceful cleanup on Ctrl+C
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	
+
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	go func() {
@@ -149,15 +149,15 @@ func (c *CLI) executeStep(mode string, isFixture bool, noInput bool) int {
 	rd := redact.New()
 
 	fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusInfo, "Running isolated step..."))
-	
+
 	cmdStr := "sleep 1"
 	if floodCmd := c.Env("TEST_FLOOD_CMD"); floodCmd != "" {
 		cmdStr = floodCmd
 	}
 	cmd := exec.Command("sh", "-c", cmdStr)
-	
+
 	res, err := rc.RunStep(ctx, cmd, 500*time.Millisecond, 1024*1024, rd.Redact)
-	
+
 	if res.FailureClass == "TIMEOUT" {
 		fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusFail, "Step failed: TIMEOUT"))
 		return result.ExitCode(result.ClassTimeout, isFixture)
@@ -165,7 +165,7 @@ func (c *CLI) executeStep(mode string, isFixture bool, noInput bool) int {
 		fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusFail, "Step cancelled"))
 		return result.ExitCode(result.ClassHarness, isFixture)
 	}
-	
+
 	if err != nil {
 		fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusFail, fmt.Sprintf("Step failed: %v", err)))
 		return result.ExitCode(result.ClassProduct, isFixture)

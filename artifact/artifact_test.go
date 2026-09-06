@@ -16,7 +16,8 @@ import (
 // the full verification pipeline: digest, signature, version.
 //
 // This test hits the network and takes ~60s. Run with:
-//   go test -v -run TestVerifyV1230 -timeout 120s ./artifact/
+//
+//	go test -v -run TestVerifyV1230 -timeout 120s ./artifact/
 func TestVerifyV1230(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping network test in short mode")

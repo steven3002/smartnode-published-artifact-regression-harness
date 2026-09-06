@@ -151,11 +151,12 @@ func extractFingerprint(colonOutput string) string {
 // parseStatusOutput interprets gpg --status-fd output.
 //
 // Key status lines (confirmed against GPG 2.4.8):
-//   [GNUPG:] GOODSIG <keyid> <uid>
-//   [GNUPG:] VALIDSIG <fpr> <date> <ts> ... <primary-fpr>
-//   [GNUPG:] BADSIG <keyid> <uid>
-//   [GNUPG:] ERRSIG <keyid> <algo> ... <fpr>
-//   [GNUPG:] NO_PUBKEY <keyid>
+//
+//	[GNUPG:] GOODSIG <keyid> <uid>
+//	[GNUPG:] VALIDSIG <fpr> <date> <ts> ... <primary-fpr>
+//	[GNUPG:] BADSIG <keyid> <uid>
+//	[GNUPG:] ERRSIG <keyid> <algo> ... <fpr>
+//	[GNUPG:] NO_PUBKEY <keyid>
 func parseStatusOutput(status string, gpgErr error) (*SignatureResult, error) {
 	result := &SignatureResult{}
 

@@ -30,7 +30,7 @@ func AskSecret(cap Capability, noInput bool, prompt string) (string, error) {
 	fmt.Fprint(f, prompt)
 
 	fd := int(f.Fd())
-	
+
 	// Setup signal handling for SIGINT to restore terminal state
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt)
@@ -46,7 +46,7 @@ func AskSecret(cap Capability, noInput bool, prompt string) (string, error) {
 		err  error
 	}
 	resChan := make(chan result, 1)
-	
+
 	go func() {
 		pass, err := term.ReadPassword(fd)
 		resChan <- result{string(pass), err}
