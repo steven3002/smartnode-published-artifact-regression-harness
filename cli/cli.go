@@ -10,7 +10,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/rocket-pool/smartnode/rp-regress/health"
 	"github.com/rocket-pool/smartnode/rp-regress/redact"
+	"github.com/rocket-pool/smartnode/rp-regress/report"
 	"github.com/rocket-pool/smartnode/rp-regress/result"
 	"github.com/rocket-pool/smartnode/rp-regress/runctx"
 	"github.com/rocket-pool/smartnode/rp-regress/ui"
@@ -89,7 +91,7 @@ func (c *CLI) runRunCmd(args []string) int {
 		return 1
 	}
 
-	return c.executeStep("run", false, *noInput)
+	return c.executeStep("run", false, *noInput, *checkpoint)
 }
 
 func (c *CLI) runFixtureCmd(args []string) int {
@@ -121,19 +123,12 @@ func (c *CLI) runFixtureCmd(args []string) int {
 		return 1
 	}
 
-	return c.executeStep("fixture", true, *noInput)
+	return c.executeStep("fixture", true, *noInput, "")
 }
 
-func (c *CLI) executeStep(mode string, isFixture bool, noInput bool) int {
+func (c *CLI) executeStep(mode string, isFixture bool, noInput bool, checkpointURL string) int {
 	fStdErr, _ := c.Stderr.(*os.File)
 	capErr := ui.DetectCapability(fStdErr, ui.ColorAuto, c.Env)
-
-	rc, err := runctx.New()
-	if err != nil {
-		fmt.Fprintf(c.Stderr, "Failed to create run context: %v\n", err)
-		return result.ExitCode(result.ClassHarness, isFixture)
-	}
-	defer rc.Cleanup()
 
 	// Signal handling for graceful cleanup on Ctrl+C
 	ctx, cancel := context.WithCancel(context.Background())
@@ -145,6 +140,20 @@ func (c *CLI) executeStep(mode string, isFixture bool, noInput bool) int {
 		<-sigChan
 		cancel()
 	}()
+
+	if checkpointURL != "" {
+		if err := health.CheckCheckpointProvider(ctx, checkpointURL); err != nil {
+			fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusFail, fmt.Sprintf("Checkpoint provider down: %v", err)))
+			return result.ExitCode(result.ClassInfrastructure, isFixture)
+		}
+	}
+
+	rc, err := runctx.New()
+	if err != nil {
+		fmt.Fprintf(c.Stderr, "Failed to create run context: %v\n", err)
+		return result.ExitCode(result.ClassHarness, isFixture)
+	}
+	defer rc.Cleanup()
 
 	rd := redact.New()
 
@@ -158,19 +167,44 @@ func (c *CLI) executeStep(mode string, isFixture bool, noInput bool) int {
 
 	res, err := rc.RunStep(ctx, cmd, 500*time.Millisecond, 1024*1024, rd.Redact)
 
-	if res.FailureClass == "TIMEOUT" {
-		fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusFail, "Step failed: TIMEOUT"))
-		return result.ExitCode(result.ClassTimeout, isFixture)
-	} else if res.FailureClass == "CANCELLED" {
-		fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusFail, "Step cancelled"))
-		return result.ExitCode(result.ClassHarness, isFixture)
+	rep := &result.Report{
+		ArtifactIdentity: "TODO",
+		ImageIdentities:  map[string]string{},
+		Profile:          "TODO",
+		Network:          "TODO",
+		ReproductionCmd:  "TODO",
 	}
 
+	var exitClass result.FailureClass
 	if err != nil {
-		fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusFail, fmt.Sprintf("Step failed: %v", err)))
-		return result.ExitCode(result.ClassProduct, isFixture)
+		if res.FailureClass == "TIMEOUT" {
+			fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusFail, "Step failed: TIMEOUT"))
+			exitClass = result.ClassTimeout
+		} else if res.FailureClass == "CANCELLED" {
+			fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusFail, "Step cancelled"))
+			exitClass = result.ClassHarness
+		} else {
+			fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusFail, fmt.Sprintf("Step failed: %v", err)))
+			exitClass = result.ClassProduct
+		}
+		rep.Result = result.Result{
+			Outcome:      result.OutcomeFail,
+			FailureClass: exitClass,
+		}
+	} else {
+		fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusPass, "Step completed successfully"))
+		exitClass = result.ClassSuccess
+		rep.Result = result.Result{
+			Outcome: result.OutcomePass,
+		}
 	}
 
-	fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusPass, "Step completed successfully"))
-	return result.ExitCode(result.ClassSuccess, false)
+	if werr := report.WriteAll(rep, rc.DataDir, "", rd); werr != nil {
+		fmt.Fprintf(c.Stderr, "Failed to write reports: %v\n", werr)
+		if exitClass == result.ClassSuccess {
+			exitClass = result.ClassHarness
+		}
+	}
+
+	return result.ExitCode(exitClass, isFixture)
 }

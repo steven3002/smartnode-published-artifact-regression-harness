@@ -14,11 +14,15 @@ const (
 // ExitCode maps a failure class to a distinct exit code.
 // For fixture runs, 0 means "the expected failure was observed".
 func ExitCode(class FailureClass, isFixture bool) int {
-	if class == ClassSuccess {
+	if isFixture {
+		if class == ClassProduct {
+			return 0 // Expected failure observed
+		}
+		if class == ClassSuccess {
+			return 1 // Harness failed to observe expected failure
+		}
+	} else if class == ClassSuccess {
 		return 0
-	}
-	if isFixture && class == ClassProduct {
-		return 0 // Expected failure observed
 	}
 	switch class {
 	case ClassProduct:
