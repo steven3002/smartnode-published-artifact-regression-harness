@@ -139,14 +139,14 @@ func PollReadiness(
 			}
 
 			if err := CheckELChainID(ctx); err != nil {
-				observe(fmt.Sprintf("execution client not answering yet: %v", err))
+				observe(describeWait("execution client", err))
 				if res, ok := diagnosed(opts, series); ok {
 					return res
 				}
 				continue
 			}
 			if err := CheckCLGenesis(ctx); err != nil {
-				observe(fmt.Sprintf("consensus client not answering yet: %v", err))
+				observe(describeWait("consensus client", err))
 				if res, ok := diagnosed(opts, series); ok {
 					return res
 				}
@@ -178,4 +178,16 @@ func diagnosed(opts Opts, series map[string]RestartSeries) (ReadinessResult, boo
 		Failure:   FailureDiagnosed,
 		Diagnosis: code,
 	}, true
+}
+
+// describeWait phrases a probe failure as the progress report it usually is.
+//
+// A client opens its HTTP port only after it has initialised, so for the first
+// minute of a run these are startup states, not faults. Saying so is the
+// difference between a reader waiting calmly and a reader debugging nothing.
+func describeWait(who string, err error) string {
+	if docker.Starting(err) {
+		return fmt.Sprintf("waiting for %s: %v (expected while it starts up)", who, err)
+	}
+	return fmt.Sprintf("%s probe failed: %v", who, err)
 }

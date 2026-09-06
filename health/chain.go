@@ -22,7 +22,7 @@ func CheckELChainID(ctx context.Context) error {
 	// Typically the container is rocketpool_eth1 and the port is 8545
 	out, err := docker.PostJSONRPC(ctx, "rocketpool_eth1", 8545, body)
 	if err != nil {
-		return fmt.Errorf("failed to query EL chain ID: %w", err)
+		return err
 	}
 
 	var resp struct {
@@ -61,7 +61,7 @@ func CheckCLGenesis(ctx context.Context) error {
 	// Typically the container is rocketpool_eth2 and the port is 5052
 	out, err := docker.GetHTTP(ctx, "rocketpool_eth2", 5052, "/eth/v1/beacon/genesis")
 	if err != nil {
-		return fmt.Errorf("failed to query CL genesis: %w", err)
+		return err
 	}
 
 	var resp struct {

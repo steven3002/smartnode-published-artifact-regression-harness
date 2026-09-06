@@ -23,3 +23,6 @@ rp-regress
 /patch_cli.sh
 /repeat_fixture.sh
 /update_cli.patch
+
+# Output of runs directed elsewhere with --out-dir
+/results/

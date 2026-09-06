@@ -217,6 +217,7 @@ func (c *CLI) pipeline(
 		Observe: func(line string) {
 			fmt.Fprintln(c.Stderr, ui.FormatStatus(cap, ui.StatusInfo, line))
 		},
+
 		// A malformed engine-API secret is a definitive answer: the clients
 		// cannot authenticate to each other and no amount of further waiting
 		// changes that.
