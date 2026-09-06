@@ -18,12 +18,15 @@ type RunContext struct {
 }
 
 func New() (*RunContext, error) {
-	home, err := os.MkdirTemp("", "rp-regress-home-*")
+	baseTmpDir := "/home/ubuntu/smartnode-release-regression/scratch"
+	os.MkdirAll(baseTmpDir, 0755)
+
+	home, err := os.MkdirTemp(baseTmpDir, "rp-regress-home-*")
 	if err != nil {
 		return nil, fmt.Errorf("create temp home: %w", err)
 	}
 
-	data, err := os.MkdirTemp("", "rp-regress-data-*")
+	data, err := os.MkdirTemp(baseTmpDir, "rp-regress-data-*")
 	if err != nil {
 		os.RemoveAll(home)
 		return nil, fmt.Errorf("create temp data: %w", err)

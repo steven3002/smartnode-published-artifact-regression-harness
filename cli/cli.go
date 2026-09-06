@@ -95,7 +95,7 @@ func (c *CLI) runRunCmd(args []string) int {
 		return 1
 	}
 
-	return c.executeStep("run", false, *noInput, *checkpoint, *release, *profile)
+	return c.executeStep("run", "", *noInput, *checkpoint, *release, *profile)
 }
 
 func (c *CLI) runFixtureCmd(args []string) int {
@@ -104,6 +104,8 @@ func (c *CLI) runFixtureCmd(args []string) int {
 
 	name := fs.String("name", "", "Fixture name (e.g. empty-jwt)")
 	profile := fs.String("profile", "", "Profile name")
+	release := fs.String("release", "v1.23.0", "Smartnode release tag")
+	checkpoint := fs.String("checkpoint-url", "https://checkpoint-sync.hoodi.ethpandaops.io", "Checkpoint sync URL")
 	noInput := fs.Bool("no-input", false, "Refuse all prompts")
 	help := fs.BoolP("help", "h", false, "Show help")
 
@@ -127,10 +129,11 @@ func (c *CLI) runFixtureCmd(args []string) int {
 		return 1
 	}
 
-	return c.executeStep("fixture", true, *noInput, "", "", *profile)
+	return c.executeStep("fixture", *name, *noInput, *checkpoint, *release, *profile)
 }
 
-func (c *CLI) executeStep(mode string, isFixture bool, noInput bool, checkpointURL, releaseTag, profileName string) int {
+func (c *CLI) executeStep(mode string, fixtureName string, noInput bool, checkpointURL, releaseTag, profileName string) int {
+	isFixture := fixtureName != ""
 	fStdErr, _ := c.Stderr.(*os.File)
 	capErr := ui.DetectCapability(fStdErr, ui.ColorAuto, c.Env)
 
@@ -234,14 +237,20 @@ func (c *CLI) executeStep(mode string, isFixture bool, noInput bool, checkpointU
 	}
 	ecClient, ccClient := parts[0], parts[1]
 
+	fixtureSetup := ""
+	if fixtureName == "empty-jwt" {
+		fixtureSetup = fmt.Sprintf("mkdir -p %s/.rocketpool/data/secrets && touch %s/.rocketpool/data/secrets/jwtsecret", rc.HomeDir, rc.HomeDir)
+	}
+
 	scriptPath := filepath.Join(rc.DataDir, "run.sh")
 	scriptContent := fmt.Sprintf(`#!/bin/sh
 set -e
 export PATH="%s:$PATH"
 rocketpool service install -d --yes
 rocketpool service config --smartnode-network testnet --enableMevBoost=false --executionClient %s --consensusClient %s --consensusCommon-checkpointSyncUrl "%s"
+%s
 rocketpool service start --yes --ignore-slash-timer
-`, rc.DataDir, ecClient, ccClient, checkpointURL)
+`, rc.DataDir, ecClient, ccClient, checkpointURL, fixtureSetup)
 	os.WriteFile(scriptPath, []byte(scriptContent), 0755)
 
 	cmd := exec.Command("sh", scriptPath)
@@ -282,11 +291,29 @@ rocketpool service start --yes --ignore-slash-timer
 		pollCancel()
 
 		if !readyRes.Ready {
-			exitClass = result.ClassProduct
-			if readyRes.FailureClass == "TIMEOUT" {
-				exitClass = result.ClassTimeout
+			jwtPath := filepath.Join(rc.HomeDir, ".rocketpool", "data", "secrets")
+			jwtBytes, jwtErr := os.ReadFile(filepath.Join(jwtPath, "jwtsecret"))
+			if jwtErr != nil {
+				// If permission denied, use docker run
+				jwtBytes, jwtErr = exec.Command("docker", "run", "--rm", "-v", jwtPath+":/s", "alpine", "cat", "/s/jwtsecret").Output()
 			}
-			fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusFail, "Readiness failed: "+readyRes.Reason))
+			jwtZero := jwtErr == nil && len(jwtBytes) == 0
+			jwtMatched := false
+			if jwtErr == nil && !jwtZero {
+				jwtStr := strings.TrimSpace(string(jwtBytes))
+				jwtMatched, _ = regexp.MatchString(`^(0x)?[0-9a-fA-F]{64}$`, jwtStr)
+			}
+
+			if jwtZero || (jwtErr == nil && !jwtMatched) {
+				fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusFail, "JWT-001: JWT secret is empty or malformed"))
+				exitClass = result.ClassProduct
+			} else {
+				exitClass = result.ClassProduct
+				if readyRes.FailureClass == "TIMEOUT" {
+					exitClass = result.ClassTimeout
+				}
+				fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusFail, "Readiness failed: "+readyRes.Reason))
+			}
 			rep.Result = result.Result{
 				Outcome:      result.OutcomeFail,
 				FailureClass: exitClass,
@@ -301,42 +328,46 @@ rocketpool service start --yes --ignore-slash-timer
 				rep.Result = result.Result{Outcome: result.OutcomeFail, FailureClass: exitClass}
 			} else {
 				fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusPass, "EL chain ID matches Hoodi"))
-			}
-
-			if err := health.CheckCLGenesis(ctx); err != nil {
-				fmt.Fprintf(c.Stderr, ui.FormatStatus(capErr, ui.StatusFail, "Failed to get CL genesis: %v\n"), err)
-				exitClass = result.ClassProduct
-				rep.Result = result.Result{Outcome: result.OutcomeFail, FailureClass: exitClass}
-			} else {
-				fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusPass, "CL genesis verified"))
-			}
-
-			// Verify JWT
-			jwtBytes, jwtErr := exec.Command("docker", "exec", "rocketpool_eth1", "cat", "/secrets/jwtsecret").Output()
-			if jwtErr != nil {
-				fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusFail, "Failed to read JWT from container"))
-				exitClass = result.ClassProduct
-				rep.Result = result.Result{
-					Outcome:      result.OutcomeFail,
-					FailureClass: exitClass,
-				}
-			} else {
-				jwtStr := strings.TrimSpace(string(jwtBytes))
-				fmt.Fprintf(c.Stderr, "JWT: %s (len %d)\n", jwtStr, len(jwtStr))
 				
-				// JWT regex: ^(0x)?[0-9a-fA-F]{64}$
-				matched, _ := regexp.MatchString(`^(0x)?[0-9a-fA-F]{64}$`, jwtStr)
-				if !matched {
-					fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusFail, "Invalid JWT format"))
+				if err := health.CheckCLGenesis(ctx); err != nil {
+					fmt.Fprintf(c.Stderr, ui.FormatStatus(capErr, ui.StatusFail, "Failed to get CL genesis: %v\n"), err)
 					exitClass = result.ClassProduct
-					rep.Result = result.Result{
-						Outcome:      result.OutcomeFail,
-						FailureClass: exitClass,
-					}
+					rep.Result = result.Result{Outcome: result.OutcomeFail, FailureClass: exitClass}
 				} else {
-					exitClass = result.ClassSuccess
-					rep.Result = result.Result{
-						Outcome: result.OutcomePass,
+					fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusPass, "CL genesis verified"))
+
+					// Verify JWT
+					jwtPath := filepath.Join(rc.HomeDir, ".rocketpool", "data", "secrets")
+					jwtBytes, jwtErr := os.ReadFile(filepath.Join(jwtPath, "jwtsecret"))
+					if jwtErr != nil {
+						jwtBytes, jwtErr = exec.Command("docker", "run", "--rm", "-v", jwtPath+":/s", "alpine", "cat", "/s/jwtsecret").Output()
+					}
+					
+					if jwtErr != nil {
+						fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusFail, "Failed to read JWT from host"))
+						exitClass = result.ClassProduct
+						rep.Result = result.Result{
+							Outcome:      result.OutcomeFail,
+							FailureClass: exitClass,
+						}
+					} else {
+						jwtStr := strings.TrimSpace(string(jwtBytes))
+						jwtMatched, _ := regexp.MatchString(`^(0x)?[0-9a-fA-F]{64}$`, jwtStr)
+						
+						if !jwtMatched {
+							fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusFail, "JWT-001: JWT secret is empty or malformed"))
+							exitClass = result.ClassProduct
+							rep.Result = result.Result{
+								Outcome:      result.OutcomeFail,
+								FailureClass: exitClass,
+							}
+						} else {
+							fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusPass, "JWT is valid"))
+							exitClass = result.ClassSuccess
+							rep.Result = result.Result{
+								Outcome: result.OutcomePass,
+							}
+						}
 					}
 				}
 			}
@@ -349,9 +380,12 @@ rocketpool service start --yes --ignore-slash-timer
 	os.WriteFile(teardownScript, []byte(fmt.Sprintf(`#!/bin/sh
 export PATH="%s:$PATH"
 export HOME="%s"
-rocketpool service terminate --yes -d
+rocketpool service terminate --yes
 `, rc.DataDir, rc.HomeDir)), 0755)
-	exec.Command("sh", teardownScript).Run()
+	cmdTeardown := exec.Command("sh", teardownScript)
+	cmdTeardown.Stdout = os.Stderr
+	cmdTeardown.Stderr = os.Stderr
+	cmdTeardown.Run()
 
 	if werr := report.WriteAll(rep, rc.DataDir, "", rd); werr != nil {
 		fmt.Fprintf(c.Stderr, "Failed to write reports: %v\n", werr)
