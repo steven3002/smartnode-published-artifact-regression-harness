@@ -7,9 +7,13 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
+	"regexp"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/rocket-pool/smartnode/rp-regress/artifact"
 	"github.com/rocket-pool/smartnode/rp-regress/health"
 	"github.com/rocket-pool/smartnode/rp-regress/redact"
 	"github.com/rocket-pool/smartnode/rp-regress/report"
@@ -91,7 +95,7 @@ func (c *CLI) runRunCmd(args []string) int {
 		return 1
 	}
 
-	return c.executeStep("run", false, *noInput, *checkpoint)
+	return c.executeStep("run", false, *noInput, *checkpoint, *release, *profile)
 }
 
 func (c *CLI) runFixtureCmd(args []string) int {
@@ -123,10 +127,10 @@ func (c *CLI) runFixtureCmd(args []string) int {
 		return 1
 	}
 
-	return c.executeStep("fixture", true, *noInput, "")
+	return c.executeStep("fixture", true, *noInput, "", "", *profile)
 }
 
-func (c *CLI) executeStep(mode string, isFixture bool, noInput bool, checkpointURL string) int {
+func (c *CLI) executeStep(mode string, isFixture bool, noInput bool, checkpointURL, releaseTag, profileName string) int {
 	fStdErr, _ := c.Stderr.(*os.File)
 	capErr := ui.DetectCapability(fStdErr, ui.ColorAuto, c.Env)
 
@@ -157,34 +161,113 @@ func (c *CLI) executeStep(mode string, isFixture bool, noInput bool, checkpointU
 
 	rd := redact.New()
 
-	fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusInfo, "Running isolated step..."))
-
-	cmdStr := "sleep 1"
-	if floodCmd := c.Env("TEST_FLOOD_CMD"); floodCmd != "" {
-		cmdStr = floodCmd
+	fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusInfo, "Fetching release "+releaseTag+"..."))
+	rel, err := artifact.FetchRelease(releaseTag)
+	if err != nil {
+		fmt.Fprintf(c.Stderr, "Failed to fetch release: %v\n", err)
+		return result.ExitCode(result.ClassInfrastructure, isFixture)
 	}
-	cmd := exec.Command("sh", "-c", cmdStr)
 
-	res, err := rc.RunStep(ctx, cmd, 500*time.Millisecond, 1024*1024, rd.Redact)
+	assets, err := artifact.ResolveAssetSet(rel, "rocketpool-cli-linux-amd64")
+	if err != nil {
+		fmt.Fprintf(c.Stderr, "Failed to resolve assets: %v\n", err)
+		return result.ExitCode(result.ClassInfrastructure, isFixture)
+	}
+
+	binPath, sigPath, err := artifact.DownloadAssetSet(assets, rc.DataDir)
+	if err != nil {
+		fmt.Fprintf(c.Stderr, "Failed to download assets: %v\n", err)
+		return result.ExitCode(result.ClassInfrastructure, isFixture)
+	}
+
+	var keyAsset *artifact.ReleaseAsset
+	for _, a := range rel.Assets {
+		if a.Name == "fornax-signing-key.asc" {
+			aCopy := a
+			keyAsset = &aCopy
+			break
+		}
+	}
+	if keyAsset == nil {
+		fmt.Fprintf(c.Stderr, "Signing key asset not found in release\n")
+		return result.ExitCode(result.ClassInfrastructure, isFixture)
+	}
+	
+	keyPath, err := artifact.Download(*keyAsset, rc.DataDir)
+	if err != nil {
+		fmt.Fprintf(c.Stderr, "Failed to download signing key: %v\n", err)
+		return result.ExitCode(result.ClassInfrastructure, isFixture)
+	}
+	
+	keyData, err := os.ReadFile(keyPath)
+	if err != nil {
+		fmt.Fprintf(c.Stderr, "Failed to read signing key: %v\n", err)
+		return result.ExitCode(result.ClassInfrastructure, isFixture)
+	}
+	
+	if err := artifact.ImportPinnedKey(keyData, rc.DataDir); err != nil {
+		fmt.Fprintf(c.Stderr, "ImportPinnedKey failed: %v\n", err)
+		return result.ExitCode(result.ClassInfrastructure, isFixture)
+	}
+
+	fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusInfo, "Verifying artifact..."))
+	verReport, err := artifact.Verify(ctx, binPath, sigPath, rc.DataDir, releaseTag, assets.DigestHex)
+	if err != nil {
+		fmt.Fprintf(c.Stderr, "Verification failed: %v\n", err)
+		return result.ExitCode(result.ClassProduct, isFixture)
+	}
+	if !verReport.VersionMatch || !verReport.DigestMatch || !verReport.SignatureValid {
+		fmt.Fprintln(c.Stderr, "Verification failed (content)")
+		return result.ExitCode(result.ClassProduct, isFixture)
+	}
+
+	cliPath := filepath.Join(rc.DataDir, "rocketpool")
+	if err := os.Rename(binPath, cliPath); err != nil {
+		fmt.Fprintf(c.Stderr, "Rename failed: %v\n", err)
+		return result.ExitCode(result.ClassHarness, isFixture)
+	}
+
+	parts := strings.Split(profileName, "-")
+	if len(parts) != 2 {
+		fmt.Fprintf(c.Stderr, "Invalid profile %q\n", profileName)
+		return result.ExitCode(result.ClassHarness, isFixture)
+	}
+	ecClient, ccClient := parts[0], parts[1]
+
+	scriptPath := filepath.Join(rc.DataDir, "run.sh")
+	scriptContent := fmt.Sprintf(`#!/bin/sh
+set -e
+export PATH="%s:$PATH"
+rocketpool service install -d --yes
+rocketpool service config --smartnode-network testnet --enableMevBoost=false --executionClient %s --consensusClient %s --consensusCommon-checkpointSyncUrl "%s"
+rocketpool service start --yes --ignore-slash-timer
+`, rc.DataDir, ecClient, ccClient, checkpointURL)
+	os.WriteFile(scriptPath, []byte(scriptContent), 0755)
+
+	cmd := exec.Command("sh", scriptPath)
+
+	fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusInfo, "Running setup & start..."))
+	res, err := rc.RunStep(ctx, cmd, 2*time.Minute, 100*1024*1024, rd.Redact)
 
 	rep := &result.Report{
-		ArtifactIdentity: "TODO",
+		ArtifactIdentity: verReport.BinarySHA256,
 		ImageIdentities:  map[string]string{},
-		Profile:          "TODO",
-		Network:          "TODO",
-		ReproductionCmd:  "TODO",
+		Profile:          profileName,
+		Network:          "hoodi",
+		ReproductionCmd:  fmt.Sprintf("rp-regress run --release %s --profile %s --checkpoint-url %s", releaseTag, profileName, checkpointURL),
 	}
 
 	var exitClass result.FailureClass
 	if err != nil {
 		if res.FailureClass == "TIMEOUT" {
-			fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusFail, "Step failed: TIMEOUT"))
+			fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusFail, "Setup failed: TIMEOUT"))
 			exitClass = result.ClassTimeout
 		} else if res.FailureClass == "CANCELLED" {
-			fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusFail, "Step cancelled"))
+			fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusFail, "Setup cancelled"))
 			exitClass = result.ClassHarness
 		} else {
-			fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusFail, fmt.Sprintf("Step failed: %v", err)))
+			fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusFail, fmt.Sprintf("Setup failed: %v", err)))
+			fmt.Fprintln(c.Stderr, "Setup Output:\n"+string(res.Output))
 			exitClass = result.ClassProduct
 		}
 		rep.Result = result.Result{
@@ -192,12 +275,83 @@ func (c *CLI) executeStep(mode string, isFixture bool, noInput bool, checkpointU
 			FailureClass: exitClass,
 		}
 	} else {
-		fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusPass, "Step completed successfully"))
-		exitClass = result.ClassSuccess
-		rep.Result = result.Result{
-			Outcome: result.OutcomePass,
+		// Poll readiness
+		fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusInfo, "Polling readiness..."))
+		pollCtx, pollCancel := context.WithTimeout(ctx, 5*time.Minute)
+		readyRes := health.PollReadiness(pollCtx, "rocketpool", 15*time.Second, 5*time.Second)
+		pollCancel()
+
+		if !readyRes.Ready {
+			exitClass = result.ClassProduct
+			if readyRes.FailureClass == "TIMEOUT" {
+				exitClass = result.ClassTimeout
+			}
+			fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusFail, "Readiness failed: "+readyRes.Reason))
+			rep.Result = result.Result{
+				Outcome:      result.OutcomeFail,
+				FailureClass: exitClass,
+			}
+		} else {
+			fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusPass, "Stack is ready!"))
+			
+			// Verify EL & CL network
+			if err := health.CheckELChainID(ctx); err != nil {
+				fmt.Fprintf(c.Stderr, ui.FormatStatus(capErr, ui.StatusFail, "Invalid EL chain ID: %v\n"), err)
+				exitClass = result.ClassProduct
+				rep.Result = result.Result{Outcome: result.OutcomeFail, FailureClass: exitClass}
+			} else {
+				fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusPass, "EL chain ID matches Hoodi"))
+			}
+
+			if err := health.CheckCLGenesis(ctx); err != nil {
+				fmt.Fprintf(c.Stderr, ui.FormatStatus(capErr, ui.StatusFail, "Failed to get CL genesis: %v\n"), err)
+				exitClass = result.ClassProduct
+				rep.Result = result.Result{Outcome: result.OutcomeFail, FailureClass: exitClass}
+			} else {
+				fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusPass, "CL genesis verified"))
+			}
+
+			// Verify JWT
+			jwtBytes, jwtErr := exec.Command("docker", "exec", "rocketpool_eth1", "cat", "/secrets/jwtsecret").Output()
+			if jwtErr != nil {
+				fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusFail, "Failed to read JWT from container"))
+				exitClass = result.ClassProduct
+				rep.Result = result.Result{
+					Outcome:      result.OutcomeFail,
+					FailureClass: exitClass,
+				}
+			} else {
+				jwtStr := strings.TrimSpace(string(jwtBytes))
+				fmt.Fprintf(c.Stderr, "JWT: %s (len %d)\n", jwtStr, len(jwtStr))
+				
+				// JWT regex: ^(0x)?[0-9a-fA-F]{64}$
+				matched, _ := regexp.MatchString(`^(0x)?[0-9a-fA-F]{64}$`, jwtStr)
+				if !matched {
+					fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusFail, "Invalid JWT format"))
+					exitClass = result.ClassProduct
+					rep.Result = result.Result{
+						Outcome:      result.OutcomeFail,
+						FailureClass: exitClass,
+					}
+				} else {
+					exitClass = result.ClassSuccess
+					rep.Result = result.Result{
+						Outcome: result.OutcomePass,
+					}
+				}
+			}
 		}
 	}
+
+	// Teardown
+	fmt.Fprintln(c.Stderr, ui.FormatStatus(capErr, ui.StatusInfo, "Tearing down..."))
+	teardownScript := filepath.Join(rc.DataDir, "teardown.sh")
+	os.WriteFile(teardownScript, []byte(fmt.Sprintf(`#!/bin/sh
+export PATH="%s:$PATH"
+export HOME="%s"
+rocketpool service terminate --yes -d
+`, rc.DataDir, rc.HomeDir)), 0755)
+	exec.Command("sh", teardownScript).Run()
 
 	if werr := report.WriteAll(rep, rc.DataDir, "", rd); werr != nil {
 		fmt.Fprintf(c.Stderr, "Failed to write reports: %v\n", werr)

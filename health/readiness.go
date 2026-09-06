@@ -2,6 +2,7 @@ package health
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/rocket-pool/smartnode/rp-regress/docker"
@@ -76,11 +77,13 @@ func PollReadiness(ctx context.Context, projectName string, window time.Duration
 			// If stable, check endpoints
 			if err := CheckELChainID(ctx); err != nil {
 				// Endpoint not ready yet
+				fmt.Printf("EL not ready: %v\n", err)
 				continue
 			}
 
 			if err := CheckCLGenesis(ctx); err != nil {
 				// Endpoint not ready yet
+				fmt.Printf("CL not ready: %v\n", err)
 				continue
 			}
 
